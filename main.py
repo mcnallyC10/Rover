@@ -3,7 +3,7 @@ from collections import deque
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk
-
+from shell_gui import shell_setup
 import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
@@ -11,17 +11,36 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import pandas as pd
 import serial
 
+from serial.tools import list_ports
+
+
 BAUD_RATE = 115200
 SERIAL_PORT = "COM6"
 WINDOW_SECONDS = 60
 MAX_POINTS = 5000
 UPDATE_MS = 30
+SSH_ADDRESS = "192.168.1.50"
 
 ser = None
-try:
-    ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-except serial.SerialException as e:
-    print("Cannot open port:", SERIAL_PORT, e)
+
+def open_port(port):
+    global ser
+    if ser is not None and ser.is_open:
+        ser.close()
+    ser = None
+
+    try:
+        ser = serial.Serial(port, BAUD_RATE, timeout = 1)
+        status_var.set("Connected: {port}")
+    except serial.SerialException as e:
+        status_ver.set("Cannot open {port}")
+        print("Cannot open port: ", port, e)
+
+
+
+
+
+
 
 running = True
 xdata = deque(maxlen=MAX_POINTS)
@@ -37,10 +56,11 @@ root.geometry("1000x800")
 root.minsize(200, 100)
 root.config(bg="black")
 
-root.columnconfigure(0, weight=1)
-root.rowconfigure(1, weight=1)
-root.columnconfigure(1, weight = 1)
-root.rowconfigure(2, weight = 1)
+root.columnconfigure(0,weight = 1, uniform = "cols")
+root.columnconfigure(1,weight = 1, uniform = "cols")
+root.rowconfigure(0,weight = 0)
+root.rowconfigure(1,weight = 1, uniform = "rows")
+root.rowconfigure(2,weight = 1, uniform = "rows")
 
 
 style = ttk.Style(root)
@@ -56,7 +76,36 @@ style1.theme_use("clam")
 style1.configure("Dark.TFrame", background="black")
 
 top_frame = ttk.Frame(root, padding=10,style = "Dark.TFrame")
-top_frame.grid(row=0, column=0, sticky="ne")
+top_frame.grid(row=0, column=0, columnspan=2, sticky="e")
+
+
+status_var = tk.StringVar(value = "Not Connected")
+
+style.configure("Status.TLabel", background = "black", foreground = "white")
+style.map("TCombobox", fieldbackground = [("readonly","#111111")],
+          foreground=[("readonly", "white")],
+          selectbackground=[("readonly", "#111111")],
+          selectforeground=[("readonly", "white")])
+
+def list_port_names():
+    return [p.device for p in list_ports.comports()]
+
+
+port_var = tk.StringVar()
+port_box = ttk.Combobox(top_frame, textvariable=port_var, state="readonly",
+                        width=10, values=list_port_names())
+port_box.pack(side="left", padx=5)
+
+def on_port_selected(event=None):
+    open_port(port_var.get())
+
+port_box.bind("<<ComboboxSelected>>", on_port_selected)
+
+def refresh_ports():
+    port_box["values"] = list_port_names()
+
+ttk.Button(top_frame, text="Refresh", command=refresh_ports).pack(side="left", padx=5)
+ttk.Label(top_frame, textvariable=status_var, style="Status.TLabel").pack(side="left", padx=10)
 
 def on_save(event=None):
     t = list(xdata)
@@ -79,12 +128,9 @@ save_button = ttk.Button(top_frame, text="Save to Excel",
                          style="Save.TButton", command=on_save)
 save_button.pack(side="right", padx=10)
 
-
-# ... Save.TButton config etc.
-
 # --- frame ---
 plot_frame = ttk.Frame(root, padding=10, style="Dark.TFrame")
-plot_frame.grid(row=1, column=0, sticky="nsew")      # don't forget this
+plot_frame.grid(row=1, column=1, sticky="nsew")      # don't forget this
 
 # --- figure ---
 fig = Figure(figsize=(10, 7), facecolor="black")
@@ -109,12 +155,99 @@ axes[-1].set_xlabel("Time (s)", color="white")
 axes[0].set_xlim(0, WINDOW_SECONDS)
 fig.tight_layout()
 
+readout_frame = ttk.Frame(root, padding = 10, style = "Dark.TFrame")
+readout_frame.grid(row=2,column = 1, sticky = "nsew")
+
+video_frame = ttk.Frame(root, padding = 5, style = "Dark.TFrame")
+video_frame.grid(row = 0, column = 0, sticky = "w")
+
+art_frame = ttk.Frame(root, padding = 2, style = "Dark.TFrame")
+art_frame.grid(row = 2, column = 1, sticky = "se")
+
 # --- canvas ---
 canvas = FigureCanvasTkAgg(fig, master=plot_frame)
-canvas.get_tk_widget().pack(fill="both", expand=True)
+canvas_widget = canvas.get_tk_widget()
+canvas_widget.config(width = 100, height = 100)
+canvas_widget.pack(fill = "both", expand = True)
+
+style.configure("Readout.TLabel", background="black", foreground="lime",
+                font=("Consolas", 16, "bold"))
+
+style.configure("artStyle.TLabel", background = "black", foreground = "white",
+                font = ("Consolas", 5, "bold"))
+
+
+ttk.Label(video_frame, text = "Video Footage: ", style = "Readout.TLabel").pack(anchor = "w", pady = 2)
+
+
+avg_vars = [tk.StringVar(value=f"{n} avg: --") for n in names]
+for var in avg_vars:
+    ttk.Label(readout_frame, textvariable=var,
+              style="Readout.TLabel").pack(anchor="w", pady=2)
+
+def update_averages():
+    for name, data, var in zip(names, ydata, avg_vars):
+        if len(data) >= UPDATE_MS:
+            recent = list(data)[-UPDATE_MS:]
+            var.set(f"{name} avg: {sum(recent) / len(recent):.3f}")
+
+
+ssh_connect, ssh_close = shell_setup(root, row = 2, column = 0)
+
+
+
+ttk.Button(top_frame, text = "SSH connect", 
+           command = lambda: ssh_connect(SSH_ADDRESS, "pi")).pack(side = "right", padx = 10)
+
+art = """
+
+                                                                    ..;===+.                                       
+                                                                .:=iiiiii=+=                                       
+                                                             .=i))=;::+)i=+,                                       
+                                                          ,=i);)I)))I):=i=;                                        
+                                                       .=i==))))ii)))I:i++                                         
+                                                     +)+))iiiiiiii))I=i+:'                                         
+                                .,:;;++++++;:,.       )iii+:::;iii))+i='                                           
+                             .:;++=iiiiiiiiii=++;.    =::,,,:::=i));=+'                                            
+                           ,;+==ii)))))))))))ii==+;,      ,,,:=i))+=:                                              
+                         ,;+=ii))))))IIIIII))))ii===;.    ,,:=i)=i+                                            
+                        ;+=ii)))IIIIITIIIIII))))iiii=+,   ,:=));=,                                       
+                      ,+=i))IIIIIITTTTTITIIIIII)))I)i=+,,:+i)=i+                                   
+                     ,+i))IIIIIITTTTTTTTTTTTI))IIII))i=::i))i='   ##     ## ####  ######   ######  ####  #######  ##    ##                                 
+                    ,=i))IIIIITLLTTTTTTTTTTIITTTTIII)+;+i)+i`     ###   ###  ##  ##    ## ##    ##  ##  ##     ## ###   ##                 
+                    =i))IIITTLTLTTTTTTTTTIITTLLTTTII+:i)ii:'      #### ####  ##  ##       ##        ##  ##     ## ####  ##      
+                   +i))IITTTLLLTTTTTTTTTTTTLLLTTTT+:i)))=,        ## ### ##  ##   ######   ######   ##  ##     ## ## ## ##               
+                   =))ITTTTTTTTTTTLTTTTTTLLLLLLTi:=)IIiii;        ##     ##  ##        ##       ##  ##  ##     ## ##  ####          
+                  .i)IIITTTTTTTTLTTTITLLLLLLLT);=)I)))))i;        ##     ##  ##  ##    ## ##    ##  ##  ##     ## ##   ###             
+                  :))IIITTTTTLTTTTTTLLHLLLLL);=)II)IIIIi=:        ##     ## ####  ######   ######  ####  #######  ##    ##                           
+                  :i)IIITTTTTTTTTLLLHLLHLL)+=)II)ITTTI)i=          ######   #######  ##    ## ######## ########   #######  ##                                  
+                  .i)IIITTTTITTLLLHHLLLL);=)II)ITTTTII)i+         ##    ## ##     ## ###   ##    ##    ##     ## ##     ## ##           
+                  =i)IIIIIITTLLLLLLHLL=:i)II)TTTTTTIII)i'         ##       ##     ## ####  ##    ##    ##     ## ##     ## ##           
+                +i)i)))IITTLLLLLLLLT=:i)II)TTTTLTTIII)i;          ##       ##     ## ## ## ##    ##    ########  ##     ## ##             
+              +ii)i:)IITTLLTLLLLT=;+i)I)ITTTTLTTTII))i;           ##       ##     ## ##  ####    ##    ##    ##  ##     ## ##         
+             =;)i=:,=)ITTTTLTTI=:i))I)TTTLLLTTTTTII)i;            ##    ## ##     ## ##   ###    ##    ##     ## ##     ## ##       
+           +i)ii::,  +)IIITI+:+i)I))TTTTLLTTTTTII))=,              ######   #######  ##    ##    ##    ##      ## #######  ########                        
+         :=;)i=:,,    ,i++::i))I)ITTTTTTTTTTIIII)=+'                                                               
+       .+ii)i=::,,   ,,::=i)))iIITTTTTTTTIIIII)=+                                                                  
+      ,==)ii=;:,,,,:::=ii)i)iIIIITIIITIIII))i+:'                                                                   
+     +=:))i==;:::;=iii)+)=  `:i)))IIIII)ii+'                                                                       
+   .+=:))iiiiiiii)))+ii;                                                                                           
+  .+=;))iiiiii)));ii+                                                                                              
+ .+=i:)))))))=+ii+                                                                                                  
+.;==i+::::=)i=;                                                                                                    
+,+==iiiiii+,                                                                                                                      
+`+=+++;`                                                                                                                                                                                                                      
+"""
+art_label = ttk.Label(art_frame, text = art,
+          style = "artStyle.TLabel", justify = "left").pack(anchor = "e")
+
+
+
+
 def on_close():
     global running
     running = False
+    ssh_close()
     if ser is not None and ser.is_open:
         ser.close()
     root.destroy()
@@ -147,6 +280,8 @@ def update_plot():
             xs = list(xdata)
             for i, line in enumerate(lines):
                 line.set_data(xs, list(ydata[i]))
+
+            update_averages()
             if xs[-1] > WINDOW_SECONDS:
                 axes[0].set_xlim(xs[-1] - WINDOW_SECONDS, xs[-1])
             canvas.draw_idle()
